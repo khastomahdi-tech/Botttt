@@ -445,7 +445,7 @@ let RT_CFG=null;
 const DEFAULT_MENU=[{k:'build',text:'🚀 ساخت پنل',style:'success',on:1},{k:'panels',text:'📦 پنل‌های من',style:'primary',on:1},{k:'accounts',text:'☁️ حساب‌های Cloudflare',style:'primary',on:1},{k:'addcf',text:'➕ افزودن Cloudflare',style:'success',on:1},{k:'tempmail',text:'📧 ایمیل موقت',style:'success',on:1},{k:'ub_menu',text:'🤖 مدیریت ربات',style:'success',on:1},{k:'sub',text:'🎟 دریافت کد اشتراک',style:'success',on:1},{k:'apk',text:'📱 اپ اختصاصی',style:'success',on:1},{k:'support',text:'💬 ارتباط با پشتیبانی',style:'primary',on:1}];
 const MCFG_LABEL={build:'ساخت پنل',panels:'پنل‌های من',accounts:'حساب‌های Cloudflare',addcf:'افزودن Cloudflare',tempmail:'ایمیل موقت',ub_menu:'مدیریت ربات',sub:'دریافت کد اشتراک',apk:'اپ اختصاصی',support:'ارتباط با پشتیبانی'};
 function menuItems(){const m=(RT_CFG&&Array.isArray(RT_CFG.menu)&&RT_CFG.menu.length)?RT_CFG.menu:DEFAULT_MENU;if(!m.some(x=>x&&x.k==='sub')){const it={k:'sub',text:'🎟 دریافت کد اشتراک',style:'success',on:1};const ai=m.findIndex(x=>x&&x.k==='apk');if(ai>=0)m.splice(ai,0,it);else{const si=m.findIndex(x=>x&&x.k==='support');if(si>=0)m.splice(si,0,it);else m.push(it)}}if(!m.some(x=>x&&x.k==='apk')){const it={k:'apk',text:'📱 اپ اختصاصی',style:'success',on:1};const si=m.findIndex(x=>x&&x.k==='support');if(si>=0)m.splice(si,0,it);else m.push(it)}return m.filter(x=>x&&x.on)}
-// ---------------- اشتراک Vex: کد ۱۶ رقمیِ ۱۰ روزه از دروازه‌ی demonvpn.shop ----------------
+// ---------------- اشتراک Vex: کد ۲۷ حرفیِ انگلیسیِ ۱۰ روزه از دروازه‌ی demonvpn.shop (هر کد فقط یک دستگاه) ----------------
 const VEX_GATE='https://demonvpn.shop';
 async function vexSub(env,action,payload){
   let key=String(env.VEX_ADMIN_KEY||'');
@@ -459,7 +459,7 @@ async function vexSub(env,action,payload){
   }catch(e){return {ok:false,error:'اتصال به سرور Vex برقرار نشد؛ کمی بعد دوباره امتحان کن.'}}
 }
 function faDate(ms){try{return new Intl.DateTimeFormat('fa-IR',{year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(ms))}catch(e){try{return new Date(ms).toISOString().slice(0,10)}catch(e2){return '-'}}}
-function codeFmt(c){return String(c||'').replace(/(\d{4})(?=\d)/g,'$1-')}
+function codeFmt(c){c=String(c||'');return /^[0-9]+$/.test(c)?c.replace(/(\d{4})(?=\d)/g,'$1-'):c.replace(/([A-Z]{9})(?=[A-Z])/g,'$1-')}
 function subLeftTxt(expires){const d=Math.max(0,Math.round((Number(expires||0)-Date.now())/86400000));return d>=1?('حدود '+d+' روز دیگر'):'کمتر از یک روز دیگر'}
 async function sendSub(chat,env,msgId){
   const out=(t,k)=>msgId?edit(chat,msgId,t,env,k):send(chat,t,env,k);
@@ -469,8 +469,8 @@ async function sendSub(chat,env,msgId){
   const txt='<b>🎟 کد اشتراک شما</b>\n\n'+
     'کد: <code>'+codeFmt(r.code)+'</code>\n'+
     'اعتبار: <b>۱۰ روز</b> — تاریخ انقضا: <b>'+faDate(r.expires)+'</b> ('+subLeftTxt(r.expires)+')\n'+
-    'دستگاه‌های فعال با این کد: <b>'+Number(r.sessions||0)+'</b>\n\n'+
-    quote('این کد را در اولین ورود به اپلیکیشن Vex وارد کن. هر دستگاهی که با این کد فعال شود، تا پایان اعتبار می‌تواند از برنامه استفاده کند.\n\nاگر خواستی همه‌ی دستگاه‌ها را بیرون بیندازی، دکمه‌ی «حذف تمام نشست‌ها» را بزن.');
+    'دستگاه فعال با این کد: <b>'+Number(r.sessions||0)+' از ۱</b>\n\n'+
+    quote('این کد ۲۷ حرفی از حروف انگلیسی است؛ آن را در اولین ورود به اپلیکیشن Vex وارد کن. هر کد فقط روی «یک دستگاه» فعال می‌شود — دستگاه دوم با همین کد پذیرفته نمی‌شود.\n\nبعد از تمام‌شدن ۱۰ روز، دوباره همین‌جا «دریافت کد اشتراک» را بزن تا کد جدید بگیری. اگر خواستی همه‌ی دستگاه‌ها را بیرون بیندازی، دکمه‌ی «حذف تمام نشست‌ها» را بزن.');
   return out(txt,KB([[B('🗑 حذف تمام نشست‌ها','subkick','','danger')],[B('🔄 بروزرسانی','sub','','success')],[B('⬅️ منوی اصلی','menu','','primary')]]));
 }
 async function subKick(chat,env,msgId){
@@ -483,10 +483,10 @@ async function subKick(chat,env,msgId){
   const n=Number(k.removed||0);
   const txt='<b>🗑 حذف تمام نشست‌ها</b>\n\n'+
     (n>0
-      ?'<b>✅ '+n+' نشست حذف شد.</b>\n\n'+quote('همه‌ی دستگاه‌هایی که با کد تو فعال شده بودند بیرون انداخته شدند؛ در باز کردن بعدی برنامه از آن‌ها دوباره کد اشتراک خواسته می‌شود.')
+      ?'<b>✅ '+n+' نشست حذف شد.</b>\n\n'+quote('همه‌ی دستگاه‌هایی که با کد تو فعال شده بودند حداکثر تا یک دقیقه بعد از برنامه بیرون انداخته می‌شوند و اتصالشان قطع می‌شود؛ کد خودش سالم می‌ماند و می‌شود دوباره روی یک دستگاه فعالش کرد.')
       :quote('هیچ نشست فعالی روی کد تو نبود؛ چیزی حذف نشد.'))+'\n\n'+
     'کد: <code>'+codeFmt(info.code)+'</code>\n'+
-    'دستگاه‌های فعال: <b>0</b>\n'+
+    'دستگاه فعال: <b>0 از ۱</b>\n'+
     'تاریخ انقضا: <b>'+faDate(info.expires)+'</b> ('+subLeftTxt(info.expires)+')';
   return out(txt,KB([[B('🎟 نمایش کد اشتراک','sub','','success')],[B('⬅️ منوی اصلی','menu','','primary')]]));
 }
