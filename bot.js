@@ -451,12 +451,20 @@ async function vexSub(env,action,payload){
   let key=String(env.VEX_ADMIN_KEY||'');
   if(!key){try{key=await kvGetBot(env,'vex_admin_key','')}catch(e){}}
   if(!key)return {ok:false,error:'کلید مدیریت Vex تنظیم نشده است؛ از پشتیبانی بخواه آن را روی ربات تنظیم کند.'};
-  try{
-    const r=await fetch(VEX_GATE+'/admin/sub/'+action,{method:'POST',headers:{'content-type':'application/json','x-admin-key':key},body:JSON.stringify(payload||{}),signal:AbortSignal.timeout(12000)});
-    const j=await r.json().catch(()=>null);
-    if(!j)return {ok:false,error:'پاسخ نامعتبر از سرور Vex (HTTP '+r.status+')'};
-    return j;
-  }catch(e){return {ok:false,error:'اتصال به سرور Vex برقرار نشد؛ کمی بعد دوباره امتحان کن.'}}
+  // User-Agent مرورگر + یک بار تلاش مجدد: بعضی قوانین WAF دروازه، درخواست‌های بدون UA را می‌بندند (HTTP 403/1010)
+  const once=async()=>{
+    try{
+      const r=await fetch(VEX_GATE+'/admin/sub/'+action,{method:'POST',headers:{'content-type':'application/json','x-admin-key':key,'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'},body:JSON.stringify(payload||{}),signal:AbortSignal.timeout(12000)});
+      const j=await r.json().catch(()=>null);
+      if(!j)return {ok:false,error:'پاسخ نامعتبر از سرور Vex (HTTP '+r.status+')'};
+      return j;
+    }catch(e){return {ok:false,error:'اتصال به سرور Vex برقرار نشد؛ کمی بعد دوباره امتحان کن.'}}
+  };
+  const a=await once();
+  if(a&&a.ok)return a;
+  const b=await once();
+  if(b&&b.ok)return b;
+  return (a&&a.error)?a:b;
 }
 function faDate(ms){try{return new Intl.DateTimeFormat('fa-IR',{year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(ms))}catch(e){try{return new Date(ms).toISOString().slice(0,10)}catch(e2){return '-'}}}
 function codeFmt(c){c=String(c||'');return /^[0-9]+$/.test(c)?c.replace(/(\d{4})(?=\d)/g,'$1-'):c.replace(/([A-Z]{9})(?=[A-Z])/g,'$1-')}
@@ -476,8 +484,13 @@ async function sendSub(chat,env,msgId){
 async function subKick(chat,env,msgId){
   const out=(t,k)=>msgId?edit(chat,msgId,t,env,k):send(chat,t,env,k);
   if(msgId)try{await edit(chat,msgId,'<b>🗑 حذف تمام نشست‌ها</b>\n\n'+quote('در حال حذف نشست‌های کد شما…'),env,KB([[B('⏳ صبر کن…','noop','','primary')]]))}catch(e){}
-  const info=await vexSub(env,'info',{chat_id:String(chat)});
-  if(!info.ok)return out('<b>❌ کد اشتراکی برای شما پیدا نشد</b>\n\n'+quote('اول از «دریافت کد اشتراک» یک کد بگیر، بعد نشست‌هایش را حذف کن.'),KB([[B('🎟 دریافت کد اشتراک','sub','','success')],[B('⬅️ منوی اصلی','menu','','primary')]]));
+  // اول با chat_id دنبال کد بگرد؛ اگر به هر دلیلی جواب نداد، از create (یک‌بارمصرف و idempotent) کدِ فعّالِ همین کاربر را بگیر
+  let info=await vexSub(env,'info',{chat_id:String(chat)});
+  if(!info.ok||!info.code){
+    const alt=await vexSub(env,'create',{chat_id:String(chat),days:10});
+    if(alt&&alt.ok&&alt.code)info=alt;
+  }
+  if(!info.ok||!info.code)return out('<b>❌ کد اشتراکی برای شما پیدا نشد</b>\n\n'+quote('اول از «دریافت کد اشتراک» یک کد بگیر، بعد نشست‌هایش را حذف کن.\n\nجزئیات فنی: '+(info.error||'نامشخص')),KB([[B('🎟 دریافت کد اشتراک','sub','','success')],[B('🔁 تلاش دوباره','subkick','','danger')],[B('⬅️ منوی اصلی','menu','','primary')]]));
   const k=await vexSub(env,'kick',{code:info.code});
   if(!k.ok)return out('<b>❌ حذف نشست‌ها انجام نشد</b>\n\n'+quote(k.error||'خطای نامشخص'),KB([[B('🔁 تلاش دوباره','subkick','','danger')],[B('⬅️ منوی اصلی','menu','','primary')]]));
   const n=Number(k.removed||0);
