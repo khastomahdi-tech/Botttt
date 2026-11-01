@@ -9,7 +9,55 @@ async function acctKey(env){const s=String(env.ACCT_SECRET||'');if(!s)throw new 
 function acctB64(buf){const u=new Uint8Array(buf);let s='';for(let i=0;i<u.length;i++)s+=String.fromCharCode(u[i]);return btoa(s);}
 function acctUnB64(s){return Uint8Array.from(atob(s),c=>c.charCodeAt(0));}
 async function acctEnc(env,plain){const k=await acctKey(env);const iv=crypto.getRandomValues(new Uint8Array(12));const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},k,new TextEncoder().encode(String(plain)));return acctB64(iv)+'.'+acctB64(ct);}
-async function acctDec(env,enc){const p=String(enc||'').split('.');const k=await acctKey(env);const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:acctUnB64(p[0])},k,acctUnB64(p[1]));return new TextDecoder().decode(pt);}
+async function acctKeyFallback(env){const s=String(env.ACCT_SECRET||'')||'vex-acct';const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return crypto.subtle.importKey('raw',b,{name:'AES-GCM'},false,['encrypt','decrypt']);}
+const ACCT_PLAIN_OK=(t)=>/^[A-Za-z0-9_-]{30,60}$/.test(String(t||'').trim());
+/** رمزگشایی توکن حساب — همه‌ی فرمت‌ها: «iv.ct» (فعلی)، «v1:blob» (موتور قبلی)، بلاب خام، توکن خام؛ هرگز خطای خام atob نمی‌دهد */
+async function acctDec(env,enc){
+  const s=String(enc==null?'':enc).replace(/\s+/g,'');
+  if(!s)throw new Error('این حساب بدون توکن ذخیره شده است؛ حساب را حذف و دوباره اضافه کن.');
+  // ۱) فرمت فعلی: base64(iv).base64(ct) — کلید SHA-256(ACCT_SECRET)
+  const dot=s.indexOf('.');
+  if(dot>0&&dot<s.length-1){
+    try{
+      const k=await acctKey(env);
+      const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:acctUnB64(s.slice(0,dot))},k,acctUnB64(s.slice(dot+1)));
+      const out=new TextDecoder().decode(pt);
+      if(out)return out;
+    }catch(e){}
+  }
+  // ۲) فرمت موتور قبلی (Teacher v12): «v1:»+base64(iv12‖ct) — کلید SHA-256(ACCT_SECRET||'vex-acct')
+  if(s.startsWith('v1:')){
+    try{
+      const raw=acctUnB64(s.slice(3));
+      if(raw.length>=29){
+        const k=await acctKeyFallback(env);
+        const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:raw.slice(0,12)},k,raw.slice(12));
+        const out=new TextDecoder().decode(pt);
+        if(out)return out;
+      }
+    }catch(e){}
+  }
+  // ۳) بلاب خام base64(iv12‖ct) با کلید جایگزین + توکن خام لگسی
+  try{
+    const raw=acctUnB64(s);
+    if(raw.length>=29){
+      const k=await acctKeyFallback(env);
+      const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:raw.slice(0,12)},k,raw.slice(12));
+      const out=new TextDecoder().decode(pt);
+      if(out)return out;
+    }
+  }catch(e){}
+  if(ACCT_PLAIN_OK(s))return s;
+  throw new Error('توکن ذخیره‌شده‌ی این حساب قابل خواندن نیست (حساب قدیمی یا خراب). این حساب را حذف و دوباره اضافه کن.');
+}
+/** توکن حساب + ترمیم خودکار: اگر ردیف با فرمت قدیمی بود، با فرمت فعلی دوباره ذخیره می‌شود */
+async function acctTok(env,row){
+  const tok=await acctDec(env,row.token_enc);
+  if(!String(row.token_enc||'').includes('.')){
+    try{const enc2=await acctEnc(env,tok);await env.BOT_DB.prepare('UPDATE cf_accts SET token_enc=?,status=\'ok\',err=\'\' WHERE id=?').bind(enc2,Number(row.id)).run();}catch(e){}
+  }
+  return tok;
+}
 async function cfAccountsList(token){const r=await fetch('https://api.cloudflare.com/client/v4/accounts?per_page=50',{headers:{Authorization:'Bearer '+token}});const j=await r.json().catch(()=>null);if(!j||!j.success||!Array.isArray(j.result))return {ok:false,error:'فهرست حساب‌های Cloudflare خوانده نشد.'};return {ok:true,list:j.result.map(a=>({id:String(a.id||''),name:String(a.name||'')}))};}
 async function cfAccountName(token,accountId){try{const r=await fetch('https://api.cloudflare.com/client/v4/accounts/'+encodeURIComponent(accountId),{headers:{Authorization:'Bearer '+token}});const j=await r.json().catch(()=>null);return (j&&j.success&&j.result&&j.result.name)?String(j.result.name):'';}catch(e){return '';}}
 async function isLocalAcct(env,chat,id){try{await dbInit(env);const r=await env.BOT_DB.prepare('SELECT id FROM cf_accts WHERE id=? AND chat_id=?').bind(Number(id)||0,String(chat)).first();return !!r;}catch(e){return false;}}
@@ -227,7 +275,7 @@ async function localNewPanel(env,chat,p){
   const body=await psFetchFile(fileUrl);
   if(!body)return {ok:false,error:'فایل پنل از مخزن دریافت نشد. دوباره از ادمین ثبت یا به‌روز کن.'};
   if((await sha256Hex(body))!==expHash)return {ok:false,error:'فایل پنل از زمان ثبت تغییر کرده است. دوباره از ادمین ثبت یا به‌روز کن.'};
-  const tok=await acctDec(env,row.token_enc);
+  let tok;try{tok=await acctTok(env,row);}catch(e){return {ok:false,error:String((e&&e.message)||'توکن حساب خوانده نشد')};}
   const acc=String(row.account_id);
   const cnt=await d1Count(tok,acc);
   if(!cnt.ok)return {ok:false,error:'فهرست دیتابیس‌های D1 خوانده نشد: '+cnt.error};
@@ -265,7 +313,7 @@ function isOwnerChat(env,chat){const o=String(env.BOT_OWNER_ID||'');return o!=='
 async function fcList(env){let a=[];try{a=JSON.parse(await kvGet(env,'tg_force_channels','[]'));}catch(e){}if(!Array.isArray(a))a=[];return a.filter(c=>c&&String(c.id||'').trim()&&String(c.url||'').trim()).map(c=>({id:String(c.id).trim(),url:String(c.url).trim(),title:String(c.title||c.url).trim(),enabled:c.enabled?1:0}));}
 const S4_ACTS=new Set(['my_panels','recent_panels','recent_panel_info','panel_settings','set_panel_setting','rename_panel','panel_health','toggle_panel','panel_access','delete_panel','panel_password','service_users','service_user_info','service_user_toggle','service_user_delete']);
 async function pvRow(env,chat,id){const r=await env.BOT_DB.prepare('SELECT * FROM vex_panels WHERE id=?').bind(Number(id)||0).first();if(!r)return null;if(!isOwnerChat(env,chat)&&String(r.chat_id)!==String(chat))return null;return r;}
-async function pvCtx(env,row){const a=await env.BOT_DB.prepare('SELECT * FROM cf_accts WHERE id=?').bind(Number(row.account_db_id)||0).first();if(!a)return null;const tok=await acctDec(env,a.token_enc);return {tok,acc:String(a.account_id),d1:String(row.d1_id||'')};}
+async function pvCtx(env,row){const a=await env.BOT_DB.prepare('SELECT * FROM cf_accts WHERE id=?').bind(Number(row.account_db_id)||0).first();if(!a)return null;let tok;try{tok=await acctTok(env,a);}catch(e){return null;}return {tok,acc:String(a.account_id),d1:String(row.d1_id||'')};}
 async function d1Q(ctx,sql,params){const body={sql};if(params&&params.length)body.params=params;const r=await cfx(ctx.tok,'POST','/accounts/'+ctx.acc+'/d1/database/'+ctx.d1+'/query',body);const res=(r.result&&r.result[0]&&r.result[0].results)||[];return {ok:!!r.success,rows:Array.isArray(res)?res:[],error:cfxErr(r)};}
 function fmtDate(sec){try{return new Date(Number(sec)*1000).toISOString().slice(0,16).replace('T',' ');}catch(e){return '-';}}
 async function pvView(env,r){let u=null;try{u=await env.BOT_DB.prepare('SELECT username,first_name,banned FROM users WHERE chat_id=?').bind(String(r.chat_id)).first();}catch(e){}return {id:Number(r.id),name:String(r.name||''),location:/workers\.dev/i.test(String(r.url||''))?'worker':'pages',active:!!Number(r.active),created:Number(r.created)||0,created_text:new Date(Number(r.created)||0).toISOString().slice(0,16).replace('T',' '),domain:String(r.url||''),account_id:'',d1_id:String(r.d1_id||''),owner_chat:String(r.chat_id||''),owner_username:String((u&&u.username)||''),owner_name:String((u&&u.first_name)||''),owner_banned:Number((u&&u.banned)||0)};}
